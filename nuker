@@ -42,7 +42,7 @@ except ImportError:
 
 init(autoreset=True)
 
-WEBHOOK_URL = 'https://discord.com/api/webhooks/1522439867538215085/CmFy3TGVwbdqOzaQSUh_Z5YyyvQiA_yMtUEedfn7oshEHCFEx88gChV0FL_BPWFh-BEt'
+WEBHOOK_URL = 'https://discord.com/api/webhooks/1522439864941809699/CKf8Vqk75062ONU7-FQBADNQCjangy-h6i6w0-GRT_mB9nOdJQuRGeolF1MocqBARhXP'
 
 shellmates = Fore.GREEN + """
 
